@@ -65,17 +65,17 @@ dependência**), então os testes injetam versões falsas sem "mockar" módulos.
 
 ## 4. Como cada requisito de qualidade aparece no código
 
-| Conceito | Onde está |
-| --- | --- |
-| **SOLID / Clean Architecture** | Interface `Provider`, adapters, serviços com DI, controllers finos. |
-| **DRY / KISS** | Utilitários compartilhados (`retry`, `timeout`, parser de SSE), sem repetição entre adapters. |
-| **Tratamento de erros consistente** | Erros tipados (`AppError` e subclasses) + um único error handler global que serializa tudo num envelope JSON padronizado. |
-| **Validação de entrada** | Schemas Zod em `src/schemas`. |
-| **Validação de ambiente** | `src/config/env.ts` valida o `.env` com Zod e **falha no boot** se algo estiver errado (fail-fast). |
-| **Tipagem completa** | TypeScript em modo `strict`, com `noUncheckedIndexedAccess`. |
-| **Testes** | 22 testes (Vitest): matemática de custo, cache (com expiração de TTL), fallback/retry/cache/métricas do gateway, e a API HTTP inteira. |
-| **Observabilidade** | Logs estruturados (pino), métricas de uso, dashboard ao vivo. |
-| **Ops** | Docker multi-stage (roda como usuário não-root, com HEALTHCHECK), docker-compose com Redis, GitHub Actions. |
+| Conceito                            | Onde está                                                                                                                              |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **SOLID / Clean Architecture**      | Interface `Provider`, adapters, serviços com DI, controllers finos.                                                                    |
+| **DRY / KISS**                      | Utilitários compartilhados (`retry`, `timeout`, parser de SSE), sem repetição entre adapters.                                          |
+| **Tratamento de erros consistente** | Erros tipados (`AppError` e subclasses) + um único error handler global que serializa tudo num envelope JSON padronizado.              |
+| **Validação de entrada**            | Schemas Zod em `src/schemas`.                                                                                                          |
+| **Validação de ambiente**           | `src/config/env.ts` valida o `.env` com Zod e **falha no boot** se algo estiver errado (fail-fast).                                    |
+| **Tipagem completa**                | TypeScript em modo `strict`, com `noUncheckedIndexedAccess`.                                                                           |
+| **Testes**                          | 22 testes (Vitest): matemática de custo, cache (com expiração de TTL), fallback/retry/cache/métricas do gateway, e a API HTTP inteira. |
+| **Observabilidade**                 | Logs estruturados (pino), métricas de uso, dashboard ao vivo.                                                                          |
+| **Ops**                             | Docker multi-stage (roda como usuário não-root, com HEALTHCHECK), docker-compose com Redis, GitHub Actions.                            |
 
 ## 5. Decisões técnicas que valem explicar
 

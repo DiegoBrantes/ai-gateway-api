@@ -65,7 +65,41 @@ function loadEnv(): Env {
     // Fail fast — a misconfigured gateway must never start half-broken.
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
+
+  assertProductionSecrets(parsed.data);
   return parsed.data;
+}
+
+/** Placeholder values shipped in `.env.example`; unsafe to run with in prod. */
+const INSECURE_DEFAULTS = {
+  apiKey: 'dev-key-please-change',
+  jwtSecret: 'change-me-in-production',
+} as const;
+
+/**
+ * Refuse to boot in production with placeholder or empty secrets. This closes
+ * the most common real-world foot-gun: shipping the example credentials.
+ * Exported for unit testing; called automatically during {@link loadEnv}.
+ */
+export function assertProductionSecrets(data: Env): void {
+  if (data.NODE_ENV !== 'production') return;
+
+  const problems: string[] = [];
+  if (data.API_KEYS.length === 0) {
+    problems.push('API_KEYS must be set in production');
+  }
+  if (data.API_KEYS.includes(INSECURE_DEFAULTS.apiKey)) {
+    problems.push('API_KEYS still contains the example key — rotate it');
+  }
+  if (data.JWT_SECRET === INSECURE_DEFAULTS.jwtSecret) {
+    problems.push('JWT_SECRET is still the example value — set a strong secret');
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `Refusing to start in production with insecure configuration:\n` +
+        problems.map((p) => `  • ${p}`).join('\n'),
+    );
+  }
 }
 
 export const env = loadEnv();

@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify&logoColor=white)](https://fastify.dev/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-22%20passing-brightgreen)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)](#-testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **🇧🇷 [Português](README.md) · 🇺🇸 English**
@@ -77,6 +77,34 @@ under our control.
 ---
 
 ## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+  client["Client<br/>(app / SDK / curl)"]
+  subgraph gateway["AI Gateway API (Fastify)"]
+    direction TB
+    mw["Middlewares<br/>headers · auth · rate-limit · validation"]
+    ctrl["Controllers<br/>(thin HTTP adapters)"]
+    gw["GatewayService<br/>fallback · retry · timeout · cache · metrics"]
+    cache[("Cache<br/>Redis / in-memory")]
+  end
+  subgraph providers["Provider adapters"]
+    op["OpenAI"]
+    an["Anthropic"]
+    ge["Gemini"]
+  end
+  client -->|HTTP / SSE| mw --> ctrl --> gw
+  gw <--> cache
+  gw --> op & an & ge
+  op -->|fetch| openai["OpenAI API"]
+  an -->|fetch| anthropic["Anthropic API"]
+  ge -->|fetch| gemini["Gemini API"]
+```
+
+> 📐 Detailed diagrams (request lifecycle, fallback, auth) live in
+> **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+### Folder structure
 
 ```
 src/
@@ -266,9 +294,11 @@ npm run test:coverage # with coverage report
 npm run typecheck     # strict type-check, no emit
 ```
 
-The suite (22 tests) covers pricing math, the cache (including TTL expiry),
-gateway **fallback / retry / caching / metrics**, and the full HTTP surface via
-Fastify's `inject` — all with **no network calls**, thanks to the mock provider.
+The suite (35 tests) covers pricing math, the cache (including TTL expiry),
+gateway **fallback / retry / caching / metrics**, the **rate limiter**, the
+**retry** logic, the **production secret guard**, the **security headers**, and
+the full HTTP surface via Fastify's `inject` — all with **no network calls**,
+thanks to the mock provider.
 
 ---
 
@@ -280,6 +310,69 @@ Fastify's `inject` — all with **no network calls**, thanks to the mock provide
 
 The image is multi-stage, runs as a non-root user, and ships a container
 `HEALTHCHECK` hitting `/health`.
+
+---
+
+## 🔒 Security
+
+Defaults applied out of the box (details in [SECURITY.md](SECURITY.md)):
+
+- **No default credentials in production** — refuses to boot in
+  `NODE_ENV=production` with empty/example `API_KEYS` or a placeholder `JWT_SECRET`.
+- **Environment validation** with Zod at boot (fail-fast).
+- **Input validation** with Zod on every request.
+- **Secret redaction in logs** — `authorization`, `x-api-key`, `cookie` and
+  `set-cookie` are masked; prompts and bodies are never logged.
+- **Security headers** (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, `Permissions-Policy`, HSTS in production).
+- **Payload limit** (1 MiB) and per-caller **rate limiting**.
+- Aligned with **OWASP API Security Top 10** items.
+
+---
+
+## ⚡ Performance
+
+The gateway is **I/O-bound**, so the design optimizes for latency and resource
+safety (details in [docs/PERFORMANCE.md](docs/PERFORMANCE.md)):
+
+- **Fastify** — one of the fastest Node HTTP frameworks.
+- **Response cache** — identical requests skip the provider round-trip.
+- **Streaming (SSE)** — low time-to-first-token.
+- **Bounded retries + timeouts** — a slow provider can't pin a request open.
+- **Redis atomic counters** — O(1) rate limiting, correct across instances.
+
+---
+
+## ❓ FAQ
+
+**Do I need API keys to run it?** No — with no credentials the gateway uses a mock
+provider, so you can clone, run and test everything in seconds.
+
+**How do I add a fourth provider (e.g. Mistral)?** Create `src/providers/mistral/`
+implementing the `Provider` interface, register it in `registry.ts`, add its
+pricing. Nothing else changes.
+
+**Does it return 3 answers if all providers are up?** No — it uses **one** provider
+at a time; the others are plan B/C, used only if the first fails.
+
+**Why not use the official SDKs?** To control the streaming path and keep
+dependencies minimal; each adapter isolates one vendor's shape in a single file.
+
+**Is it production-ready?** Yes — with Docker, Redis, rate limiting, security
+headers, env validation and CI. Configure real keys and a strong `JWT_SECRET`.
+
+---
+
+## 📚 Documentation
+
+| Document                             | Contents                                     |
+| ------------------------------------ | -------------------------------------------- |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Layers, diagrams (lifecycle, fallback, auth) |
+| [DECISIONS](docs/DECISIONS.md)       | Architecture Decision Records (ADRs)         |
+| [PERFORMANCE](docs/PERFORMANCE.md)   | Performance choices and how to measure       |
+| [SECURITY](SECURITY.md)              | Security policy and design                   |
+| [CONTRIBUTING](CONTRIBUTING.md)      | How to contribute                            |
+| [CHANGELOG](CHANGELOG.md)            | Version history                              |
 
 ---
 

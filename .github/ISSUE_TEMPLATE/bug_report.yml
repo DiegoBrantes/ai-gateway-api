@@ -1,0 +1,42 @@
+name: 🐛 Bug report
+description: Report a problem so we can fix it
+title: 'bug: '
+labels: ['bug', 'triage']
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug! Please do not include real API keys or secrets.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I call POST /v1/chat with ..., I get ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps or a curl command that triggers the issue.
+      render: bash
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v1.0.0 or commit sha
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider in use
+      options: ['mock', 'openai', 'anthropic', 'gemini', 'not relevant']
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste logs with secrets redacted.
+      render: shell

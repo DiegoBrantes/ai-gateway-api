@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { buildCache, type Cache } from './cache';
 import { dashboardHtml } from './dashboard/html';
 import { errorHandler } from './middlewares/error.middleware';
+import { securityHeaders } from './middlewares/securityHeaders';
 import { buildRegistry, type ProviderRegistry } from './providers/registry';
 import { env, isProduction, isTest } from './config/env';
 import { registerAuthRoutes } from './routes/auth';
@@ -44,6 +45,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       ? false
       : {
           level: env.LOG_LEVEL,
+          // Never let credentials reach the logs, in any environment.
+          redact: {
+            paths: [
+              'req.headers.authorization',
+              'req.headers.cookie',
+              'req.headers["x-api-key"]',
+              'res.headers["set-cookie"]',
+            ],
+            censor: '[redacted]',
+          },
           ...(isProduction
             ? {}
             : {
@@ -59,9 +70,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         },
     genReqId: () => crypto.randomUUID(),
     trustProxy: true,
+    // Cap request bodies to protect against oversized-payload abuse.
+    bodyLimit: 1_048_576, // 1 MiB
   });
 
   app.setErrorHandler(errorHandler);
+  // Security headers on every response (applied before routing).
+  app.addHook('onRequest', securityHeaders);
   await app.register(cors, { origin: true });
 
   await app.register(swagger, {
