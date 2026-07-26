@@ -4,7 +4,6 @@
 
 **One API for OpenAI, Google Gemini and Anthropic — with automatic fallback, streaming, token accounting and cost estimation.**
 
-[![CI](https://github.com/DiegoBrantes/ai-gateway-api/actions/workflows/ci.yml/badge.svg)](https://github.com/DiegoBrantes/ai-gateway-api/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify&logoColor=white)](https://fastify.dev/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
