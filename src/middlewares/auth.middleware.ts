@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env';
+import { matchesAnyKey } from '../auth/apiKeys';
 import { verifyToken } from '../auth/jwt';
 import { UnauthorizedError } from '../utils/errors';
 
@@ -20,7 +21,7 @@ export async function authenticate(
   _reply: FastifyReply,
 ): Promise<void> {
   const apiKey = request.headers['x-api-key'];
-  if (typeof apiKey === 'string' && env.API_KEYS.includes(apiKey)) {
+  if (typeof apiKey === 'string' && matchesAnyKey(apiKey, env.API_KEYS)) {
     request.principal = `key:${maskKey(apiKey)}`;
     return;
   }

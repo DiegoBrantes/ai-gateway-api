@@ -11,5 +11,7 @@ export interface Cache {
   increment(key: string, ttlSeconds: number): Promise<number>;
   /** Remaining TTL in ms, or -1 when the key has no expiry / is absent. */
   pttl(key: string): Promise<number>;
+  /** Lightweight liveness check for readiness probes (no side effects). */
+  healthy(): Promise<boolean>;
   close(): Promise<void>;
 }

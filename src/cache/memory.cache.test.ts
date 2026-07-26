@@ -37,4 +37,26 @@ describe('MemoryCache', () => {
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(10_000);
   });
+
+  it('is reported healthy', async () => {
+    expect(await new MemoryCache().healthy()).toBe(true);
+  });
+
+  it('evicts the least-recently-used entry past the size cap', async () => {
+    const cache = new MemoryCache(2);
+    await cache.set('a', 1);
+    await cache.set('b', 2);
+    await cache.get('a'); // touch 'a' → 'b' becomes LRU
+    await cache.set('c', 3); // exceeds cap → evict 'b'
+    expect(cache.size).toBe(2);
+    expect(await cache.get('b')).toBeNull();
+    expect(await cache.get('a')).toBe(1);
+    expect(await cache.get('c')).toBe(3);
+  });
+
+  it('never exceeds the configured maximum', async () => {
+    const cache = new MemoryCache(3);
+    for (let i = 0; i < 10; i++) await cache.set(`k${i}`, i);
+    expect(cache.size).toBe(3);
+  });
 });

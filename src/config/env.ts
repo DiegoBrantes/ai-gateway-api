@@ -17,6 +17,20 @@ const csv = () =>
         .filter(Boolean),
     );
 
+/**
+ * Parse a boolean-ish env string. Returns `undefined` when unset so the
+ * caller can apply an environment-specific default (e.g. "on in dev,
+ * off in prod"). Accepts 1/true/yes/on (case-insensitive) as truthy.
+ */
+const boolFlag = () =>
+  z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value === undefined || value.trim() === '') return undefined;
+      return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+    });
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().default('0.0.0.0'),
@@ -26,6 +40,7 @@ const envSchema = z.object({
     .default('info'),
 
   API_KEYS: csv(),
+  ADMIN_API_KEY: z.string().default(''),
   JWT_SECRET: z.string().min(1).default('change-me-in-production'),
   JWT_EXPIRES_IN: z.string().default('1h'),
 
@@ -34,9 +49,19 @@ const envSchema = z.object({
 
   REDIS_URL: z.string().default(''),
   CACHE_TTL_SECONDS: z.coerce.number().int().nonnegative().default(300),
+  /** Whether cache entries are isolated per caller or shared globally. */
+  CACHE_SCOPE: z.enum(['principal', 'global']).default('principal'),
+  /** Hard cap on the in-memory cache to bound memory use (LRU eviction). */
+  MEMORY_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(10_000),
 
   DEFAULT_PROVIDER: z.string().default('openai'),
   FALLBACK_PROVIDERS: csv(),
+  /** Explicitly allow the built-in mock provider in production. */
+  ALLOW_MOCK_PROVIDER: boolFlag(),
+  /** Expose /dashboard and /metrics/summary without auth. */
+  DASHBOARD_PUBLIC: boolFlag(),
+  /** Mount the Swagger UI (static assets). The OpenAPI JSON is always served. */
+  ENABLE_SWAGGER_UI: boolFlag(),
 
   OPENAI_API_KEY: z.string().default(''),
   OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
@@ -67,6 +92,7 @@ function loadEnv(): Env {
   }
 
   assertProductionSecrets(parsed.data);
+  assertProviderPolicy(parsed.data);
   return parsed.data;
 }
 
@@ -102,7 +128,40 @@ export function assertProductionSecrets(data: Env): void {
   }
 }
 
+/** True when at least one real (non-mock) provider credential is present. */
+export function hasRealProvider(data: Env): boolean {
+  return [data.OPENAI_API_KEY, data.ANTHROPIC_API_KEY, data.GEMINI_API_KEY].some(
+    (key) => key.length > 0,
+  );
+}
+
+/**
+ * In production, refuse to boot if no real provider is configured unless the
+ * operator has explicitly opted into the mock provider. This prevents a
+ * misconfigured deployment from silently serving simulated completions.
+ * Exported for unit testing; called automatically during {@link loadEnv}.
+ */
+export function assertProviderPolicy(data: Env): void {
+  if (data.NODE_ENV !== 'production') return;
+  if (hasRealProvider(data)) return;
+  if (data.ALLOW_MOCK_PROVIDER === true) return;
+  throw new Error(
+    'Refusing to start in production with no real provider configured.\n' +
+      '  • Set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY, or\n' +
+      '  • set ALLOW_MOCK_PROVIDER=true to explicitly serve the mock provider.',
+  );
+}
+
 export const env = loadEnv();
 
 export const isProduction = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';
+
+/**
+ * Derived policy flags with environment-aware defaults. Outside production the
+ * defaults favour zero-friction local development; in production they default
+ * to the safe/closed option and must be opted out of explicitly.
+ */
+export const mockAllowed = !isProduction || env.ALLOW_MOCK_PROVIDER === true;
+export const dashboardPublic = env.DASHBOARD_PUBLIC ?? !isProduction;
+export const swaggerUiEnabled = env.ENABLE_SWAGGER_UI ?? !isProduction;
