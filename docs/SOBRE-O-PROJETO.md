@@ -73,7 +73,7 @@ dependência**), então os testes injetam versões falsas sem "mockar" módulos.
 | **Validação de entrada**            | Schemas Zod em `src/schemas`.                                                                                                          |
 | **Validação de ambiente**           | `src/config/env.ts` valida o `.env` com Zod e **falha no boot** se algo estiver errado (fail-fast).                                    |
 | **Tipagem completa**                | TypeScript em modo `strict`, com `noUncheckedIndexedAccess`.                                                                           |
-| **Testes**                          | 22 testes (Vitest): matemática de custo, cache (com expiração de TTL), fallback/retry/cache/métricas do gateway, e a API HTTP inteira. |
+| **Testes**                          | 124 testes (Vitest, ~95% linhas): adaptadores reais (fetch mockado), parser SSE, failover de streaming, custo, cache (TTL/LRU/isolamento), rate limit, guards de produção/mock, `/ready`, contrato OpenAPI e a API HTTP inteira. |
 | **Observabilidade**                 | Logs estruturados (pino), métricas de uso, dashboard ao vivo.                                                                          |
 | **Ops**                             | Docker multi-stage (roda como usuário não-root, com HEALTHCHECK), docker-compose com Redis, GitHub Actions.                            |
 
@@ -133,9 +133,12 @@ Com Redis o contador usa `INCR` atômico, então o limite é correto mesmo com v
 instâncias. Em memória (uma instância) também é correto.
 
 **"O que acontece se um provedor trava no meio do streaming?"**
-Cada requisição tem timeout via `AbortController`. No streaming, o erro é
-capturado e enviado como um evento `error` no próprio SSE antes de fechar a
-conexão.
+Cada requisição tem timeout via `AbortController`. O failover entre provedores no
+streaming acontece **antes do primeiro token**: se o provedor escolhido falhar ao
+abrir o stream, o gateway tenta o próximo. Depois que o primeiro `delta` já foi
+enviado, não trocamos de provedor (misturaria respostas) — o erro é capturado e
+enviado como um evento `error` no próprio SSE antes de fechar. Se o cliente
+desconecta, o `AbortController` cancela a chamada upstream.
 
 ## 8. Como rodar na hora de demonstrar
 
@@ -149,5 +152,5 @@ Depois abra:
 - `http://localhost:3000/docs` — Swagger UI interativo
 - `http://localhost:3000/dashboard` — dashboard de consumo ao vivo
 
-E rode `npm test` na frente do recrutador — 22 testes verdes em ~1,5s passam muita
+E rode `npm test` na frente do recrutador — **124 testes verdes** em ~4s passam muita
 confiança.

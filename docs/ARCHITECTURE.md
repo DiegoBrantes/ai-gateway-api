@@ -132,6 +132,17 @@ for both rate limiting and per-caller usage attribution.
 - **Fail-fast configuration.** The environment is validated (and production
   secrets are enforced) at boot, never at request time.
 - **Mock provider.** Guarantees the whole pipeline is runnable and testable with
-  zero credentials and zero network.
+  zero credentials and zero network — but it is **blocked in production** unless
+  `ALLOW_MOCK_PROVIDER=true`, so a misconfigured deploy fails fast instead of faking
+  answers (ADR-008).
+- **Streaming failover before the first token.** The chain is tried until one
+  provider opens its stream; after the first `delta`, failures surface as a
+  structured `error` event rather than a silent provider switch (ADR-007).
+- **Liveness vs. readiness.** `/health` reports only that the process is alive;
+  `/ready` checks that a provider can serve and the cache is reachable — without
+  calling any paid API.
+- **Operational surface is guarded.** `/dashboard` and `/metrics/summary` are
+  protected in production (`DASHBOARD_PUBLIC`); the OpenAPI JSON is always at
+  `/openapi.json`, while the Swagger UI is gated by `ENABLE_SWAGGER_UI`.
 
 See [DECISIONS](DECISIONS.md) for the rationale behind individual trade-offs.

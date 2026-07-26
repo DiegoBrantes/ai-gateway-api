@@ -8,7 +8,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify&logoColor=white)](https://fastify.dev/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)](#-testes)
+[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)](#-testes)
+[![Coverage](https://img.shields.io/badge/coverage-~95%25%20lines-brightgreen)](#-testes)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **🇧🇷 Português · 🇺🇸 [English](README.en.md)**
@@ -49,22 +50,42 @@ chamada.
 
 ## ✨ Funcionalidades
 
-|                                   |                                                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 🔀 **API unificada**              | Um único formato de requisição para chat, streaming e embeddings nos três provedores.                    |
-| 🛟 **Fallback automático**        | Cadeia de provedores configurável; falhas temporárias (5xx/429) passam para o próximo provedor sozinhas. |
-| ⚡ **Streaming (SSE)**            | Streaming token a token, com um contrato de eventos normalizado (`delta` / `done`).                      |
-| 🔁 **Retry & timeout**            | Backoff exponencial com jitter e timeout por requisição (via `AbortController`).                         |
-| 🧮 **Contagem de tokens & custo** | Usa o consumo real do provedor quando disponível; senão, estima — com preço por uma tabela por modelo.   |
-| 🗄️ **Cache de respostas**         | Chave de cache determinística para chamadas de chat idênticas (Redis ou memória).                        |
-| 🔐 **Autenticação**               | Autenticação por **API key** e por **JWT**, com identidade por chamador para atribuição de uso.          |
-| 🚦 **Rate limiting**              | Limitador por janela fixa, com os cabeçalhos padrão `X-RateLimit-*`, usando o cache compartilhado.       |
-| 📊 **Dashboard ao vivo**          | `/dashboard` sem dependências, mostrando o consumo por provedor e por modelo.                            |
-| 📖 **OpenAPI + Swagger UI**       | Documentação gerada automaticamente em `/docs`.                                                          |
-| 🧱 **Arquitetura limpa**          | Adaptadores de provedor atrás de uma interface, serviços com injeção de dependência, erros tipados.      |
-| 🐳 **Pronto para produção**       | Imagem Docker multi-stage, docker-compose com Redis, CI no GitHub Actions.                               |
+|                                   |                                                                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 🔀 **API unificada**              | Um único formato de requisição para chat, streaming e embeddings nos três provedores.                                |
+| 🛟 **Fallback automático**        | Cadeia de provedores configurável; falhas temporárias (5xx/429) passam para o próximo. No streaming, o failover ocorre **antes do primeiro token** (depois disso, o erro é reportado, sem trocar de provedor). |
+| ⚡ **Streaming (SSE)**            | Streaming token a token, com contrato de eventos normalizado: `provider` → `delta` → `done`/`error` → `end`.         |
+| 🔁 **Retry & timeout**            | Backoff exponencial com jitter e timeout por requisição (via `AbortController`); cancelamento propagado no disconnect. |
+| 🧮 **Tokens & custo (estimado)**  | Usa o consumo **real** do provedor quando disponível; senão, **estima**. Custo é uma **estimativa** por tabela de preços; modelos sem preço retornam `pricingKnown:false` (custo `null`, nunca zero enganoso). |
+| 🗄️ **Cache de respostas**         | Chave determinística, **isolada por chamador** por padrão (`CACHE_SCOPE`); Redis ou memória (com limite/LRU).        |
+| 🔐 **Autenticação**               | **API key** (comparação constant-time) e **JWT**, com identidade por chamador para atribuição de uso.                |
+| 🚦 **Rate limiting**              | Limitador por janela fixa, com os cabeçalhos padrão `X-RateLimit-*`, usando o cache compartilhado.                   |
+| 📊 **Dashboard ao vivo**          | `/dashboard` sem dependências, com status real, loading/empty/error e a11y. Protegido por padrão em produção.        |
+| 📖 **OpenAPI**                    | `/openapi.json` sempre disponível (com schemas de resposta/erro); Swagger UI em `/docs` (ativa por padrão fora de produção). |
+| 🧱 **Arquitetura limpa**          | Adaptadores de provedor atrás de uma interface, serviços com injeção de dependência, erros tipados.                  |
+| 🐳 **Blocos operacionais**        | Imagem Docker multi-stage (não-root, `tini`, healthcheck), docker-compose com Redis, CI com audit/CodeQL/Dependabot. |
 
 ---
+
+## ✅ Production Readiness
+
+Uma leitura honesta do que está pronto e o que ainda não está. Este projeto é uma
+**demonstração técnica sólida e base extensível** — traz vários blocos prontos para
+produção, mas **não é um produto production-ready fechado**.
+
+| Área | Estado | Limitação |
+| --- | --- | --- |
+| Chat (JSON) | **Pronto** | — |
+| Streaming (SSE) | **Parcial** | Failover só **antes do primeiro token**; falha no meio vira `event: error` (sem trocar de provedor) |
+| Embeddings | **Pronto** | OpenAI e Gemini; Anthropic não oferece embeddings |
+| Fallback / retry / timeout | **Pronto** | Cadeia limitada; sem circuit breaker |
+| Redis | **Implementado, opcional** | Sem Redis, usa cache em memória (com limite/LRU) |
+| Métricas / dashboard | **Em memória** | Zeram no restart; **não** somam entre instâncias; não é billing |
+| Custo | **Estimativa** | Tabela de preços estática (rev. 2025-01); modelos sem preço → `pricingKnown:false` |
+| Persistência (histórico) | **Ausente** | Sem banco; nada é persistido além do cache/rate-limit no Redis |
+| Providers reais | **Requer credenciais** | Sem chaves, usa o **mock** (bloqueado em produção salvo `ALLOW_MOCK_PROVIDER=true`) |
+| Mock provider | **Dev/testes** | Determinístico, offline; recusa rodar silenciosamente em produção |
+| Vision / multimodal | **Ausente (roadmap)** | O tipo de mensagem é texto; capacidade `vision` não é anunciada |
 
 ## 🧰 Tecnologias
 
@@ -168,6 +189,23 @@ sequenceDiagram
 
 ---
 
+## 📊 Dashboard
+
+Página autossuficiente (sem build/framework) em `/dashboard`, com status real
+(`/ready`), estados de loading/empty/error, acessibilidade e aviso de que as métricas
+são em memória.
+
+![Dashboard de consumo](docs/screenshots/dashboard-1440x900.png)
+
+<details>
+<summary>Mais estados (erro, mobile, tema claro)</summary>
+
+| Erro (backend fora) | Mobile | Tema claro |
+| --- | --- | --- |
+| ![Erro](docs/screenshots/dashboard-error-1440x900.png) | ![Mobile](docs/screenshots/dashboard-mobile-390x844.png) | ![Claro](docs/screenshots/dashboard-light-1440x900.png) |
+
+</details>
+
 ## 🚀 Começando
 
 ### Pré-requisitos
@@ -208,10 +246,16 @@ Toda a configuração é feita por variáveis de ambiente, validadas no boot (ve
 | Variável                                                  | Padrão                  | Descrição                                           |
 | --------------------------------------------------------- | ----------------------- | --------------------------------------------------- |
 | `API_KEYS`                                                | `dev-key-please-change` | Chaves de API aceitas, separadas por vírgula.       |
+| `ADMIN_API_KEY`                                           | _(vazio)_               | Chave admin opcional para dashboard/métricas.       |
 | `DEFAULT_PROVIDER`                                        | `openai`                | Provedor usado quando o chamador não especifica um. |
 | `FALLBACK_PROVIDERS`                                      | `anthropic,gemini`      | Cadeia de fallback, em ordem.                       |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | —                       | Habilitam os provedores reais.                      |
+| `ALLOW_MOCK_PROVIDER`                                     | _(vazio)_               | Em produção, exige `true` para permitir o mock.     |
 | `REDIS_URL`                                               | _(vazio)_               | Preencha para usar Redis; vazio = cache em memória. |
+| `CACHE_SCOPE`                                             | `principal`             | `principal` (isolado por chamador) ou `global`.     |
+| `MEMORY_CACHE_MAX_ENTRIES`                                | `10000`                 | Limite do cache em memória (LRU).                   |
+| `DASHBOARD_PUBLIC`                                        | dev: `true` / prod: `false` | Torna dashboard/métricas públicos.              |
+| `ENABLE_SWAGGER_UI`                                       | dev: `true` / prod: `false` | Monta o Swagger UI (`/openapi.json` é sempre servido). |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`                 | `60` / `60000`          | Requisições por janela, por chamador.               |
 | `REQUEST_TIMEOUT_MS`                                      | `30000`                 | Timeout por requisição a um provedor.               |
 | `PROVIDER_MAX_RETRIES`                                    | `2`                     | Tentativas antes de trocar de provedor.             |
@@ -226,13 +270,19 @@ Toda a configuração é feita por variáveis de ambiente, validadas no boot (ve
 | `POST` | `/v1/chat/stream`  |  ✅  | Resposta de chat em streaming (SSE).            |
 | `POST` | `/v1/embeddings`   |  ✅  | Cria embeddings.                                |
 | `POST` | `/auth/token`      |  —   | Troca uma API key por um JWT de curta duração.  |
-| `GET`  | `/v1/providers`    |  ✅  | Provedores e status de configuração de cada um. |
-| `GET`  | `/v1/models`       |  ✅  | Modelos disponíveis e suas capacidades.         |
+| `GET`  | `/v1/providers`    |  ✅  | Provedores, status e flag `mock`.               |
+| `GET`  | `/v1/models`       |  ✅  | Modelos e **capacidades por modelo**.           |
 | `GET`  | `/v1/usage`        |  ✅  | Uso e custo da chave que fez a chamada.         |
-| `GET`  | `/health`          |  —   | Verificação de saúde (liveness).                |
-| `GET`  | `/metrics/summary` |  —   | Resumo global de uso (alimenta o dashboard).    |
-| `GET`  | `/dashboard`       |  —   | Dashboard de consumo ao vivo (HTML).            |
-| `GET`  | `/docs`            |  —   | Swagger UI.                                     |
+| `GET`  | `/health`          |  —   | Liveness (processo vivo).                       |
+| `GET`  | `/ready`           |  —   | Readiness (providers + cache).                  |
+| `GET`  | `/metrics/summary` | 🔒¹  | Resumo global de uso (alimenta o dashboard).    |
+| `GET`  | `/dashboard`       | 🔒¹  | Dashboard de consumo ao vivo (HTML).            |
+| `GET`  | `/openapi.json`    |  —   | Documento OpenAPI (sempre disponível).          |
+| `GET`  | `/docs`            |  —   | Swagger UI (ativa por padrão fora de produção). |
+
+> ¹ `/metrics/summary` e `/dashboard` são **públicos em dev/test** e **protegidos em
+> produção** por padrão (`DASHBOARD_PUBLIC`). Quando protegidos, exigem `x-api-key`,
+> `ADMIN_API_KEY` ou um JWT válido.
 
 ---
 
@@ -314,11 +364,18 @@ npm run test:coverage # com relatório de cobertura
 npm run typecheck     # checagem de tipos estrita, sem gerar arquivos
 ```
 
-A suíte (35 testes) cobre o cálculo de custo, o cache (incluindo expiração por TTL),
-o **fallback / retry / cache / métricas** do gateway, o **rate limiter**, a lógica de
-**retry**, o **guard de segredos de produção**, os **security headers** e toda a
-superfície HTTP via o `inject` do Fastify — tudo **sem nenhuma chamada de rede**,
-graças ao provedor simulado.
+A suíte (**128 testes**, ~95% de cobertura de linhas / ~80% de branches) cobre: os
+**adaptadores reais** (OpenAI/Anthropic/Gemini com `fetch` mockado), o **parser SSE**,
+`fetchWithTimeout`, o **failover de streaming** (antes/depois do primeiro token), o
+cálculo de custo (incl. `pricingKnown`/micro-dólares), o cache (TTL, **LRU**,
+**isolamento por chamador**), `RedisCache` (JSON corrompido, health), o **rate
+limiter**, a **comparação constant-time** de chaves, o **guard de dashboard**, os
+guards de **produção/mock**, o `/ready`, o contrato **OpenAPI** e toda a superfície
+HTTP via o `inject` do Fastify — tudo **sem nenhuma chamada de rede**.
+
+```bash
+npm run test:coverage
+```
 
 ---
 
@@ -340,14 +397,18 @@ Boas práticas aplicadas por padrão (detalhes em [SECURITY.md](SECURITY.md)):
 - **Sem credenciais padrão em produção** — o serviço se recusa a subir com
   `NODE_ENV=production` se `API_KEYS` estiver vazio/for a chave de exemplo, ou se
   `JWT_SECRET` ainda for o placeholder.
-- **Validação de ambiente** com Zod no boot (falha rápido).
-- **Validação de entrada** com Zod em toda requisição.
+- **Sem mock silencioso em produção** — sem provedor real e sem
+  `ALLOW_MOCK_PROVIDER=true`, o boot **falha** (nunca responde simulado sem querer).
+- **Comparação constant-time de API keys** (`crypto.timingSafeEqual` sobre SHA-256).
+- **Dashboard/métricas protegidos em produção** por padrão (`DASHBOARD_PUBLIC`).
+- **Isolamento de cache por chamador** por padrão (`CACHE_SCOPE=principal`).
+- **Validação de ambiente e de entrada** com Zod (falha rápido no boot).
 - **Segredos ocultos nos logs** — `authorization`, `x-api-key`, `cookie` e
-  `set-cookie` são mascarados; prompts e corpos nunca são logados.
+  `set-cookie` mascarados; prompts e corpos nunca são logados.
 - **Security headers** (`X-Content-Type-Options`, `X-Frame-Options`,
-  `Referrer-Policy`, `Permissions-Policy`, HSTS em produção).
-- **Limite de payload** (1 MiB) e **rate limiting** por chamador.
-- Alinhado a itens do **OWASP API Security Top 10**.
+  `Referrer-Policy`, `Permissions-Policy`, HSTS em produção) e **payload ≤ 1 MiB**.
+- **Dependências**: `npm audit --audit-level=high` no CI + Dependabot + CodeQL; a
+  árvore é mantida limpa via `overrides` (ver [SECURITY.md](SECURITY.md)).
 
 ---
 
@@ -384,8 +445,14 @@ Para controlar o streaming e manter as dependências mínimas. Cada adaptador is
 a diferença de formato de um provedor em um único arquivo.
 
 **Dá pra usar em produção?**
-Sim — com Docker, Redis, rate limiting, security headers, validação de ambiente e
-CI. Configure suas chaves reais e um `JWT_SECRET` forte.
+Como **base**, sim — traz Docker (não-root, `tini`, healthcheck), Redis, rate
+limiting, security headers, validação de ambiente, guards de produção e CI com audit/
+CodeQL. Mas **não é um produto production-ready fechado**: métricas são em memória
+(zeram no restart, não somam entre instâncias), não há persistência de histórico, o
+custo é uma **estimativa** (não billing) e o failover de streaming vale **só antes do
+primeiro token**. Veja a seção [Production Readiness](#-production-readiness) para o
+mapa honesto do que está pronto. Para produção real: configure chaves reais, um
+`JWT_SECRET` forte, `DASHBOARD_PUBLIC=false` e um Redis compartilhado.
 
 ---
 

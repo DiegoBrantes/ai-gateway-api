@@ -8,7 +8,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify&logoColor=white)](https://fastify.dev/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Tests](https://img.shields.io/badge/tests-35%20passing-brightgreen)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)](#-testing)
+[![Coverage](https://img.shields.io/badge/coverage-~95%25%20lines-brightgreen)](#-testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **🇧🇷 [Português](README.md) · 🇺🇸 English**
@@ -26,7 +27,8 @@ between them without rewriting your application.
 **AI Gateway API** puts a single, provider-agnostic HTTP surface in front of all
 three. Your app speaks one schema; the gateway handles vendor differences,
 **fails over automatically** when a provider is down, **streams** tokens over SSE,
-and reports **exact token usage and estimated cost** on every call.
+and reports **token usage (real when the provider reports it, estimated otherwise)
+and an estimated cost** on every call.
 
 ```
                          ┌──────────────────────────────┐
@@ -51,17 +53,39 @@ and reports **exact token usage and estimated cost** on every call.
 |                                |                                                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | 🔀 **Unified API**             | One request schema for chat, streaming and embeddings across three providers.                         |
-| 🛟 **Automatic fallback**      | Configurable provider chain; transient 5xx/429 failures roll over to the next provider transparently. |
-| ⚡ **Streaming (SSE)**         | Token-by-token streaming with a normalized `delta` / `done` event contract.                           |
-| 🔁 **Retry & timeout**         | Bounded exponential backoff with jitter; per-request `AbortController` timeouts.                      |
-| 🧮 **Token & cost accounting** | Real provider usage when available, calibrated estimates otherwise, priced from a per-model table.    |
-| 🗄️ **Response caching**        | Deterministic cache key for idempotent chat calls (Redis or in-memory).                               |
-| 🔐 **Auth**                    | API-key **and** JWT authentication, per-caller identity for attribution.                              |
+| 🛟 **Automatic fallback**      | Configurable provider chain; transient 5xx/429 failures roll over to the next. In streaming, failover happens **before the first token** (after that, a mid-stream failure is reported, not silently re-routed). |
+| ⚡ **Streaming (SSE)**         | Token-by-token streaming with a normalized `provider` → `delta` → `done`/`error` → `end` event contract. |
+| 🔁 **Retry & timeout**         | Bounded exponential backoff with jitter; per-request `AbortController` timeouts; client disconnect cancels upstream. |
+| 🧮 **Tokens & cost (estimate)**| Real provider usage when reported, **estimated** otherwise. Cost is an **estimate** from a per-model table; unknown models return `pricingKnown:false` (cost `null`, never a misleading zero). |
+| 🗄️ **Response caching**        | Deterministic key, **per-caller isolated** by default (`CACHE_SCOPE`); Redis or in-memory (bounded, LRU). |
+| 🔐 **Auth**                    | API-key (constant-time compare) **and** JWT authentication, per-caller identity for attribution.     |
 | 🚦 **Rate limiting**           | Fixed-window limiter with standard `X-RateLimit-*` headers, backed by the shared cache.               |
-| 📊 **Live dashboard**          | Zero-dependency `/dashboard` showing consumption per provider and per model.                          |
-| 📖 **OpenAPI + Swagger UI**    | Auto-generated docs at `/docs`.                                                                       |
+| 📊 **Live dashboard**          | Zero-dependency `/dashboard` with real status, loading/empty/error states and a11y. Protected in production by default. |
+| 📖 **OpenAPI**                 | `/openapi.json` always served (with response/error schemas); Swagger UI at `/docs` (on by default outside production). |
 | 🧱 **Clean architecture**      | Provider adapters behind an interface, dependency-injected services, typed errors.                    |
-| 🐳 **Prod-ready ops**          | Multi-stage Docker image, docker-compose with Redis, GitHub Actions CI.                               |
+| 🐳 **Ops building blocks**     | Multi-stage Docker image (non-root, `tini`, healthcheck), docker-compose with Redis, CI with audit/CodeQL/Dependabot. |
+
+---
+
+## ✅ Production Readiness
+
+An honest read of what is ready and what is not. This project is a **solid technical
+demo and extensible base** — it ships many production-grade building blocks, but is
+**not a closed, production-ready product**.
+
+| Area | State | Limitation |
+| --- | --- | --- |
+| Chat (JSON) | **Ready** | — |
+| Streaming (SSE) | **Partial** | Failover only **before the first token**; a mid-stream failure becomes `event: error` |
+| Embeddings | **Ready** | OpenAI & Gemini; Anthropic has no embeddings |
+| Fallback / retry / timeout | **Ready** | Bounded chain; no circuit breaker |
+| Redis | **Implemented, optional** | Without Redis, in-memory cache (bounded/LRU) |
+| Metrics / dashboard | **In-memory** | Reset on restart; **not** shared across instances; not billing |
+| Cost | **Estimate** | Static price table (rev. 2025-01); unknown models → `pricingKnown:false` |
+| Persistence (history) | **Absent** | No database; nothing persisted beyond cache/rate-limit in Redis |
+| Real providers | **Require credentials** | Without keys, the **mock** is used (blocked in production unless `ALLOW_MOCK_PROVIDER=true`) |
+| Mock provider | **Dev/tests** | Deterministic, offline; refuses to run silently in production |
+| Vision / multimodal | **Absent (roadmap)** | Message content is text; the `vision` capability is not advertised |
 
 ---
 
@@ -193,7 +217,12 @@ All configuration is via environment variables, validated at boot (see
 | `DEFAULT_PROVIDER`                                        | `openai`                | Provider used when the caller doesn't specify one. |
 | `FALLBACK_PROVIDERS`                                      | `anthropic,gemini`      | Ordered fallback chain.                            |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | —                       | Enable real providers.                             |
+| `ALLOW_MOCK_PROVIDER`                                     | _(empty)_               | In production, must be `true` to allow the mock.   |
 | `REDIS_URL`                                               | _(empty)_               | Set to use Redis; empty = in-memory cache.         |
+| `CACHE_SCOPE`                                             | `principal`             | `principal` (per-caller) or `global`.              |
+| `MEMORY_CACHE_MAX_ENTRIES`                                | `10000`                 | In-memory cache cap (LRU).                          |
+| `DASHBOARD_PUBLIC`                                        | dev `true` / prod `false` | Expose dashboard/metrics without auth.           |
+| `ENABLE_SWAGGER_UI`                                       | dev `true` / prod `false` | Mount Swagger UI (`/openapi.json` always served).|
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`                 | `60` / `60000`          | Requests per window per caller.                    |
 | `REQUEST_TIMEOUT_MS`                                      | `30000`                 | Per-provider request timeout.                      |
 | `PROVIDER_MAX_RETRIES`                                    | `2`                     | Retries before failing over.                       |
@@ -208,13 +237,19 @@ All configuration is via environment variables, validated at boot (see
 | `POST` | `/v1/chat/stream`  |  ✅  | Streaming chat completion (SSE).             |
 | `POST` | `/v1/embeddings`   |  ✅  | Create embeddings.                           |
 | `POST` | `/auth/token`      |  —   | Exchange an API key for a short-lived JWT.   |
-| `GET`  | `/v1/providers`    |  ✅  | Providers and their configuration status.    |
-| `GET`  | `/v1/models`       |  ✅  | Available models and capabilities.           |
+| `GET`  | `/v1/providers`    |  ✅  | Providers, status and `mock` flag.           |
+| `GET`  | `/v1/models`       |  ✅  | Models and **per-model capabilities**.       |
 | `GET`  | `/v1/usage`        |  ✅  | Usage & cost for the calling key.            |
 | `GET`  | `/health`          |  —   | Liveness probe.                              |
-| `GET`  | `/metrics/summary` |  —   | Global usage summary (powers the dashboard). |
-| `GET`  | `/dashboard`       |  —   | Live usage dashboard (HTML).                 |
-| `GET`  | `/docs`            |  —   | Swagger UI.                                  |
+| `GET`  | `/ready`           |  —   | Readiness (providers + cache).               |
+| `GET`  | `/metrics/summary` | 🔒¹  | Global usage summary (powers the dashboard). |
+| `GET`  | `/dashboard`       | 🔒¹  | Live usage dashboard (HTML).                 |
+| `GET`  | `/openapi.json`    |  —   | OpenAPI document (always served).            |
+| `GET`  | `/docs`            |  —   | Swagger UI (on by default outside prod).     |
+
+> ¹ `/metrics/summary` and `/dashboard` are **public in dev/test** and **protected in
+> production** by default (`DASHBOARD_PUBLIC`): they then require `x-api-key`,
+> `ADMIN_API_KEY` or a valid JWT.
 
 ---
 
@@ -294,11 +329,14 @@ npm run test:coverage # with coverage report
 npm run typecheck     # strict type-check, no emit
 ```
 
-The suite (35 tests) covers pricing math, the cache (including TTL expiry),
-gateway **fallback / retry / caching / metrics**, the **rate limiter**, the
-**retry** logic, the **production secret guard**, the **security headers**, and
-the full HTTP surface via Fastify's `inject` — all with **no network calls**,
-thanks to the mock provider.
+The suite (**128 tests**, ~95% line / ~80% branch coverage) covers the **real
+adapters** (OpenAI/Anthropic/Gemini with mocked `fetch`), the **SSE parser**,
+`fetchWithTimeout`, **streaming failover** (before/after the first token), pricing
+(incl. `pricingKnown`/micro-dollars), the cache (TTL, **LRU**, **per-caller
+isolation**), `RedisCache` (corrupted JSON, health), the **rate limiter**, the
+**constant-time** key compare, the **dashboard guard**, the **production/mock**
+guards, `/ready`, the **OpenAPI** contract, and the full HTTP surface via Fastify's
+`inject` — all with **no network calls**.
 
 ---
 
@@ -358,8 +396,15 @@ at a time; the others are plan B/C, used only if the first fails.
 **Why not use the official SDKs?** To control the streaming path and keep
 dependencies minimal; each adapter isolates one vendor's shape in a single file.
 
-**Is it production-ready?** Yes — with Docker, Redis, rate limiting, security
-headers, env validation and CI. Configure real keys and a strong `JWT_SECRET`.
+**Is it production-ready?** As a **base**, it ships production-grade building blocks
+(non-root Docker with `tini` + healthcheck, Redis, rate limiting, security headers,
+env/boot guards, CI with audit/CodeQL). But it is **not a closed, production-ready
+product**: metrics are in-memory (reset on restart, not shared across instances),
+there is no history persistence, cost is an **estimate** (not billing), and streaming
+failover only applies **before the first token**. See
+[Production Readiness](#-production-readiness) for the honest map. For real
+production: set real keys, a strong `JWT_SECRET`, `DASHBOARD_PUBLIC=false` and a
+shared Redis.
 
 ---
 

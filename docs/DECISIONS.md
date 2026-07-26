@@ -89,3 +89,69 @@ streaming), estimate with a calibrated heuristic (~4 chars/token).
 
 **Consequences.** Accurate accounting when the provider reports it, good-enough
 estimates otherwise, and no heavy tokenizer dependencies.
+
+---
+
+## ADR-007 — Fail over on streaming only before the first token
+
+**Status:** Accepted (v1.1.0)
+
+**Context.** Non-streaming calls can transparently retry another provider. For
+streaming, switching providers after bytes have been sent would interleave two
+different completions.
+
+**Decision.** Try providers (with retries) until one successfully opens its stream
+and yields its first event; emit a `provider` SSE event, then stream. After the
+first `delta`, a failure is surfaced as a structured `error` event — never a silent
+switch.
+
+**Consequences.** Real resilience while establishing the stream, and a coherent,
+single-provider response once it starts. `attempts` is reported on the `done` event.
+
+---
+
+## ADR-008 — No silent mock provider in production
+
+**Status:** Accepted (v1.1.0)
+
+**Context.** The mock provider is invaluable for zero-credential dev/test, but a
+misconfigured production deployment could accidentally serve simulated completions.
+
+**Decision.** In `NODE_ENV=production`, the mock is registered only when
+`ALLOW_MOCK_PROVIDER=true`; otherwise, if no real provider is configured, the process
+refuses to boot.
+
+**Consequences.** Dev/test stay frictionless; production never fakes answers by
+accident. The choice is explicit and logged.
+
+---
+
+## ADR-009 — Per-caller cache isolation by default
+
+**Status:** Accepted (v1.1.0)
+
+**Context.** A shared response cache could serve one caller's completion to another
+for an identical prompt.
+
+**Decision.** `CACHE_SCOPE=principal` (default) folds a hash of the caller identity
+into the cache key. `global` opts into a shared cache. The raw API key is never used
+in the key — only a hash.
+
+**Consequences.** Safe multi-tenant defaults; a documented opt-out for deployments
+that explicitly want a shared cache.
+
+---
+
+## ADR-010 — Honest cost: unknown pricing is null, not zero
+
+**Status:** Accepted (v1.1.0)
+
+**Context.** Returning `0` for a model absent from the pricing table silently
+understates cost.
+
+**Decision.** Unknown models return `pricingKnown:false` with `null` costs and log a
+one-time warning. Known costs accumulate in integer micro-dollars to avoid
+floating-point drift. Costs remain estimates for observability, not billing.
+
+**Consequences.** Dashboards distinguish "free" from "unknown", and totals stay
+precise under high volume.
