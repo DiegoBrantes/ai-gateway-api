@@ -1,6 +1,29 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
+import type { Cache } from '../src/cache';
+import { MemoryCache } from '../src/cache/memory.cache';
+import { ProviderRegistry } from '../src/providers/registry';
+import { MockProvider } from '../src/providers/mock';
+import { GatewayService } from '../src/services/gateway.service';
+import { MetricsService } from '../src/services/metrics.service';
+
+const downCache: Cache = {
+  get: async () => null,
+  set: async () => {},
+  increment: async () => 1,
+  pttl: async () => -1,
+  healthy: async () => false,
+  close: async () => {},
+};
+
+async function appWith(registry: ProviderRegistry, cache: Cache): Promise<FastifyInstance> {
+  const metrics = new MetricsService();
+  const gateway = new GatewayService({ registry, cache, metrics });
+  const app = await buildApp({ services: { registry, cache, metrics, gateway } });
+  await app.ready();
+  return app;
+}
 
 /**
  * End-to-end HTTP tests using Fastify's inject (no real network). With
@@ -120,7 +143,7 @@ describe('AI Gateway HTTP API', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('streams a chat completion over SSE', async () => {
+  it('streams a chat completion over SSE with a provider event first', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/chat/stream',
@@ -129,7 +152,85 @@ describe('AI Gateway HTTP API', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(res.payload).toContain('event: provider');
     expect(res.payload).toContain('event: delta');
     expect(res.payload).toContain('event: done');
+    expect(res.payload).toContain('event: end');
+  });
+
+  it('reports per-model capabilities (embedding models are not "chat")', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/models',
+      headers: { 'x-api-key': 'test-key' },
+    });
+    const models = res.json().models as Array<{ id: string; capabilities: string[] }>;
+    const embed = models.find((m) => m.id === 'text-embedding-3-small');
+    const chat = models.find((m) => m.id === 'gpt-4o');
+    expect(embed?.capabilities).toEqual(['embeddings']);
+    expect(chat?.capabilities).toEqual(['chat', 'stream']);
+    // No model advertises the (unimplemented) vision capability.
+    expect(models.every((m) => !m.capabilities.includes('vision'))).toBe(true);
+  });
+
+  it('flags the mock provider in the providers listing', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/providers',
+      headers: { 'x-api-key': 'test-key' },
+    });
+    const providers = res.json().providers as Array<{ name: string; mock: boolean }>;
+    expect(providers.find((p) => p.name === 'mock')?.mock).toBe(true);
+    expect(providers.find((p) => p.name === 'openai')?.mock).toBe(false);
+  });
+
+  it('reports readiness with dependency checks', async () => {
+    const res = await app.inject({ method: 'GET', url: '/ready' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('ready');
+    expect(body.checks).toMatchObject({ cache: 'ok' });
+  });
+
+  it('serves a valid OpenAPI document at /openapi.json with expected paths', async () => {
+    const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+    expect(res.statusCode).toBe(200);
+    const spec = res.json();
+    expect(spec.openapi).toMatch(/^3\./);
+    for (const path of ['/v1/chat', '/v1/chat/stream', '/v1/embeddings', '/v1/models']) {
+      expect(spec.paths).toHaveProperty(path);
+    }
+    // Authenticated routes declare a security requirement.
+    expect(spec.paths['/v1/chat'].post.security).toBeDefined();
+    // Reusable security schemes are documented.
+    expect(Object.keys(spec.components.securitySchemes)).toEqual(
+      expect.arrayContaining(['apiKey', 'bearerAuth']),
+    );
+  });
+
+  it('exposes metrics publicly in the test environment (DASHBOARD_PUBLIC default)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/metrics/summary' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().inMemory).toBe(true);
+  });
+});
+
+describe('readiness edge cases', () => {
+  it('reports degraded (200) when the cache is down but a provider can serve', async () => {
+    const registry = new ProviderRegistry([new MockProvider()]);
+    const app = await appWith(registry, downCache);
+    const res = await app.inject({ method: 'GET', url: '/ready' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'degraded', checks: { cache: 'down' } });
+    await app.close();
+  });
+
+  it('reports not_ready (503) when no provider can serve', async () => {
+    const registry = new ProviderRegistry([]); // no real providers, no mock
+    const app = await appWith(registry, new MemoryCache());
+    const res = await app.inject({ method: 'GET', url: '/ready' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ status: 'not_ready', checks: { providers: 'none' } });
+    await app.close();
   });
 });
