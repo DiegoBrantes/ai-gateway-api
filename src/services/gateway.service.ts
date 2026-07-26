@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { env } from '../config/env';
 import type { Cache } from '../cache';
 import type { ProviderRegistry } from '../providers/registry';
@@ -7,8 +6,10 @@ import type { Provider, ProviderStreamEvent } from '../providers/types';
 import type {
   ChatRequest,
   ChatResponse,
+  CostBreakdown,
   EmbeddingsRequest,
   EmbeddingsResponse,
+  TokenUsage,
 } from '../types';
 import { AllProvidersFailedError, AppError, ProviderError } from '../utils/errors';
 import { withRetry } from '../utils/http';
@@ -23,6 +24,27 @@ interface GatewayDeps {
 }
 
 /**
+ * Events yielded by {@link GatewayService.chatStream}. Unlike the raw provider
+ * events, these carry the resolved provider/model and (on `done`) the computed
+ * cost and the list of providers attempted, so the HTTP layer can render a
+ * self-describing SSE stream.
+ */
+export type GatewayStreamEvent =
+  | { type: 'open'; provider: string; model: string; attempts: string[] }
+  | { type: 'delta'; provider: string; delta: string }
+  | {
+      type: 'done';
+      provider: string;
+      model: string;
+      usage: TokenUsage;
+      cost: CostBreakdown;
+      attempts: string[];
+    };
+
+/** Models we've already warned about missing pricing for (avoids log spam). */
+const unpricedWarned = new Set<string>();
+
+/**
  * The orchestration core. Given a provider-agnostic request it:
  *   1. builds the fallback chain (explicit provider → default → configured fallbacks),
  *   2. tries each provider with bounded retries and per-request timeouts,
@@ -33,9 +55,13 @@ interface GatewayDeps {
 export class GatewayService {
   constructor(private readonly deps: GatewayDeps) {}
 
-  async chat(request: ChatRequest, apiKey: string): Promise<ChatResponse> {
+  async chat(
+    request: ChatRequest,
+    apiKey: string,
+    signal?: AbortSignal,
+  ): Promise<ChatResponse> {
     const startedAt = Date.now();
-    const cacheKey = this.chatCacheKey(request);
+    const cacheKey = this.chatCacheKey(request, apiKey);
 
     const cached = await this.deps.cache.get<ChatResponse>(cacheKey);
     if (cached) {
@@ -55,7 +81,7 @@ export class GatewayService {
 
     const attempts: string[] = [];
     const result = await this.runChain(request.provider, attempts, async (provider) => {
-      const raw = await withRetry(() => provider.chat(request), {
+      const raw = await withRetry(() => provider.chat(request, signal), {
         retries: env.PROVIDER_MAX_RETRIES,
         isRetryable,
       });
@@ -68,6 +94,7 @@ export class GatewayService {
       raw.usage.promptTokens,
       raw.usage.completionTokens,
     );
+    warnIfUnpriced(raw.model, cost);
     const response: ChatResponse = {
       id: randomUUID(),
       provider: provider.name,
@@ -94,28 +121,88 @@ export class GatewayService {
   }
 
   /**
-   * Streaming chat. Yields provider-agnostic stream events and, on the
-   * terminal `done` event, records usage/cost. Streaming responses are
-   * never cached (they are consumed once, incrementally).
+   * Streaming chat with real failover *before the first token*. Each provider
+   * in the chain is tried (with bounded retries) until one successfully opens
+   * its stream and yields its first event. Once bytes are flowing we never
+   * switch providers — a mid-stream failure surfaces as a structured error.
+   * Streaming responses are never cached (consumed once, incrementally).
    */
   async *chatStream(
     request: ChatRequest,
     apiKey: string,
-  ): AsyncGenerator<ProviderStreamEvent & { provider: string }, void, unknown> {
+    signal?: AbortSignal,
+  ): AsyncGenerator<GatewayStreamEvent, void, unknown> {
     const startedAt = Date.now();
     const attempts: string[] = [];
-    // For streaming we only fail over while establishing the stream; once
-    // bytes are flowing we cannot silently switch providers mid-response.
-    const provider = await this.runChain(request.provider, attempts, async (p) => {
-      // Probe by opening the generator lazily below; here we just pick a
-      // configured provider. Actual failures surface on first iteration.
-      return p;
-    });
+    const chain = this.buildChain(request.provider).filter(
+      (provider) => provider.isConfigured() && provider.capabilities.includes('chat'),
+    );
+    if (chain.length === 0) {
+      throw new ProviderError(
+        'gateway',
+        'No configured provider can handle this request',
+        503,
+      );
+    }
+
+    let chosen: Provider | undefined;
+    let iterator: AsyncIterator<ProviderStreamEvent> | undefined;
+    let firstResult: IteratorResult<ProviderStreamEvent> | undefined;
+    let lastError: unknown;
+
+    for (const provider of chain) {
+      attempts.push(provider.name);
+      try {
+        const opened = await withRetry(
+          async () => {
+            const it = provider.chatStream(request, signal)[Symbol.asyncIterator]();
+            const first = await it.next();
+            return { it, first };
+          },
+          { retries: env.PROVIDER_MAX_RETRIES, isRetryable },
+        );
+        chosen = provider;
+        iterator = opened.it;
+        firstResult = opened.first;
+        break;
+      } catch (error) {
+        lastError = error;
+        logger.warn(
+          { provider: provider.name, err: describe(error) },
+          'Stream provider failed before first token — trying next in chain',
+        );
+        // Client errors won't be fixed by another provider.
+        if (
+          error instanceof AppError &&
+          error.statusCode < 500 &&
+          error.statusCode !== 429
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    if (!chosen || !iterator || !firstResult) {
+      throw new AllProvidersFailedError(attempts, describe(lastError));
+    }
+
+    yield {
+      type: 'open',
+      provider: chosen.name,
+      model: request.model ?? chosen.defaultChatModel(),
+      attempts: [...attempts],
+    };
 
     let lastEvent: ProviderStreamEvent | undefined;
-    for await (const event of provider.chatStream(request)) {
+    let result = firstResult;
+    while (!result.done) {
+      const event = result.value;
       lastEvent = event;
-      yield { ...event, provider: provider.name };
+      if (event.type === 'delta') {
+        yield { type: 'delta', provider: chosen.name, delta: event.delta };
+      }
+      // A failure here is AFTER the first token — it propagates (no failover).
+      result = await iterator.next();
     }
 
     if (lastEvent?.type === 'done') {
@@ -124,9 +211,10 @@ export class GatewayService {
         lastEvent.usage.promptTokens,
         lastEvent.usage.completionTokens,
       );
+      warnIfUnpriced(lastEvent.model, cost);
       this.deps.metrics.record({
         apiKey,
-        provider: provider.name,
+        provider: chosen.name,
         model: lastEvent.model,
         operation: 'chat_stream',
         usage: lastEvent.usage,
@@ -134,12 +222,21 @@ export class GatewayService {
         cached: false,
         latencyMs: Date.now() - startedAt,
       });
+      yield {
+        type: 'done',
+        provider: chosen.name,
+        model: lastEvent.model,
+        usage: lastEvent.usage,
+        cost,
+        attempts: [...attempts],
+      };
     }
   }
 
   async embeddings(
     request: EmbeddingsRequest,
     apiKey: string,
+    signal?: AbortSignal,
   ): Promise<EmbeddingsResponse> {
     const startedAt = Date.now();
     const attempts: string[] = [];
@@ -150,11 +247,12 @@ export class GatewayService {
       (p) => p.capabilities.includes('embeddings'),
     );
 
-    const raw = await withRetry(() => provider.embeddings(request), {
+    const raw = await withRetry(() => provider.embeddings(request, signal), {
       retries: env.PROVIDER_MAX_RETRIES,
       isRetryable,
     });
     const cost = estimateCost(raw.model, raw.usage.promptTokens, 0);
+    warnIfUnpriced(raw.model, cost);
     const response: EmbeddingsResponse = {
       provider: provider.name,
       model: raw.model,
@@ -233,7 +331,8 @@ export class GatewayService {
       const provider = this.deps.registry.get(name);
       if (provider) chain.push(provider);
     }
-    // Always keep the mock as a last resort in dev when nothing else is set up.
+    // Keep the mock as a last resort only when it's registered (dev/test, or
+    // production with ALLOW_MOCK_PROVIDER) and nothing else is configured.
     const mock = this.deps.registry.get('mock');
     if (mock && !seen.has('mock') && chain.every((p) => !p.isConfigured())) {
       chain.push(mock);
@@ -241,7 +340,13 @@ export class GatewayService {
     return chain;
   }
 
-  private chatCacheKey(request: ChatRequest): string {
+  /**
+   * Deterministic cache key. Includes every parameter that changes the answer.
+   * When `CACHE_SCOPE=principal` (the default) the caller identity is folded in
+   * so one caller's response is never served to another; `global` opts into a
+   * shared cache. The raw API key is never used — only a hash of the principal.
+   */
+  private chatCacheKey(request: ChatRequest, principal: string): string {
     const material = JSON.stringify({
       p: request.provider ?? env.DEFAULT_PROVIDER,
       m: request.model,
@@ -249,7 +354,22 @@ export class GatewayService {
       mt: request.maxTokens,
       msg: request.messages,
     });
-    return `chat:${createHash('sha256').update(material).digest('hex')}`;
+    const digest = createHash('sha256').update(material).digest('hex');
+    if (env.CACHE_SCOPE === 'principal') {
+      const who = createHash('sha256').update(principal).digest('hex').slice(0, 16);
+      return `chat:${who}:${digest}`;
+    }
+    return `chat:${digest}`;
+  }
+}
+
+function warnIfUnpriced(model: string, cost: CostBreakdown): void {
+  if (!cost.pricingKnown && !unpricedWarned.has(model)) {
+    unpricedWarned.add(model);
+    logger.warn(
+      { model },
+      'No pricing entry for model — cost reported as null (not zero). Update src/services/pricing.ts.',
+    );
   }
 }
 

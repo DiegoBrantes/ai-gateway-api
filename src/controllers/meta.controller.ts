@@ -14,23 +14,21 @@ export class MetaController {
   ) {}
 
   providers = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const providers: ProviderHealth[] = this.registry
-      .all()
-      .filter((provider) => provider.name !== 'mock')
-      .map((provider) => ({
-        name: provider.name,
-        configured: provider.isConfigured(),
-        models: provider.listModels(),
-      }));
+    const providers: ProviderHealth[] = this.registry.all().map((provider) => ({
+      name: provider.name,
+      configured: provider.isConfigured(),
+      mock: provider.isMock,
+      models: provider.listModels(),
+    }));
     reply.send({ providers });
   };
 
   models = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const models: ModelInfo[] = this.registry.all().flatMap((provider) =>
-      provider.listModels().map((id) => ({
-        id,
+      provider.listModelInfos().map((model) => ({
+        id: model.id,
         provider: provider.name,
-        capabilities: [...provider.capabilities],
+        capabilities: [...model.capabilities],
       })),
     );
     reply.send({ models });

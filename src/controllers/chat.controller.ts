@@ -1,12 +1,15 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayService } from '../services/gateway.service';
 import { chatRequestSchema } from '../schemas';
+import { AppError } from '../utils/errors';
 import { sseFrame } from '../utils/sse';
 
 /**
  * HTTP adapter for chat. Validates input, delegates all logic to the
  * GatewayService, and — for the streaming variant — bridges the
- * provider-agnostic event stream onto an SSE response.
+ * provider-agnostic event stream onto an SSE response and propagates client
+ * disconnects upstream so we stop generating (and paying) once the caller
+ * goes away.
  */
 export class ChatController {
   constructor(private readonly gateway: GatewayService) {}
@@ -32,12 +35,23 @@ export class ChatController {
       'x-accel-buffering': 'no',
     });
 
+    // Cancel upstream work when the client disconnects mid-stream.
+    const controller = new AbortController();
+    const onClose = (): void => controller.abort();
+    request.raw.once('close', onClose);
+
     try {
       for await (const event of this.gateway.chatStream(
         input,
         request.principal ?? 'anonymous',
+        controller.signal,
       )) {
-        if (event.type === 'delta') {
+        if (controller.signal.aborted) break;
+        if (event.type === 'open') {
+          reply.raw.write(
+            sseFrame('provider', { provider: event.provider, model: event.model }),
+          );
+        } else if (event.type === 'delta') {
           reply.raw.write(
             sseFrame('delta', { content: event.delta, provider: event.provider }),
           );
@@ -47,19 +61,30 @@ export class ChatController {
               provider: event.provider,
               model: event.model,
               usage: event.usage,
+              cost: event.cost,
+              attempts: event.attempts,
             }),
           );
         }
       }
     } catch (error) {
-      reply.raw.write(
-        sseFrame('error', {
-          message: error instanceof Error ? error.message : 'stream failed',
-        }),
-      );
+      // A client that already disconnected doesn't need (and can't receive) an
+      // error frame — the abort is expected, not a failure.
+      if (!controller.signal.aborted) {
+        reply.raw.write(
+          sseFrame('error', {
+            code: error instanceof AppError ? error.code : 'stream_error',
+            message: error instanceof Error ? error.message : 'stream failed',
+            requestId: request.id,
+          }),
+        );
+      }
     } finally {
-      reply.raw.write('event: end\ndata: [DONE]\n\n');
-      reply.raw.end();
+      request.raw.removeListener('close', onClose);
+      if (!reply.raw.writableEnded) {
+        reply.raw.write('event: end\ndata: [DONE]\n\n');
+        reply.raw.end();
+      }
     }
   };
 }

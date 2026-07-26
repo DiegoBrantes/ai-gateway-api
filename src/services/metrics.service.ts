@@ -1,4 +1,5 @@
 import type { CostBreakdown, TokenUsage } from '../types';
+import { usd } from './pricing';
 
 export interface UsageEvent {
   apiKey: string;
@@ -15,6 +16,10 @@ interface Aggregate {
   requests: number;
   cachedRequests: number;
   totalTokens: number;
+  /** Integer micro-dollars — accumulated without floating-point drift. */
+  totalCostMicros: number;
+  /** Requests whose model had no pricing entry (cost unknown, excluded from cost). */
+  unpricedRequests: number;
   totalCostUsd: number;
 }
 
@@ -25,8 +30,9 @@ interface Totals extends Aggregate {
 
 /**
  * In-process usage aggregator that powers the `/dashboard` view and the
- * `/v1/usage` endpoint. Kept intentionally simple and per-instance;
- * for cross-instance analytics, forward UsageEvents to your warehouse.
+ * `/v1/usage` endpoint. Kept intentionally simple and per-instance and
+ * IN-MEMORY: totals reset on restart and are NOT shared across instances.
+ * For durable, cross-instance analytics, forward UsageEvents to a warehouse.
  */
 export class MetricsService {
   private readonly totals: Totals = emptyTotals();
@@ -43,6 +49,8 @@ export class MetricsService {
     return {
       totals: this.totals,
       keys: this.byApiKey.size,
+      /** Metrics are volatile: they reflect activity since process start. */
+      inMemory: true,
     };
   }
 
@@ -67,18 +75,26 @@ function bump<T extends Aggregate>(aggregate: T, event: UsageEvent): T {
   aggregate.requests += 1;
   if (event.cached) aggregate.cachedRequests += 1;
   aggregate.totalTokens += event.usage.totalTokens;
-  aggregate.totalCostUsd = round(aggregate.totalCostUsd + event.cost.totalCost);
+  if (event.cost.pricingKnown && event.cost.costMicros !== null) {
+    aggregate.totalCostMicros += event.cost.costMicros;
+  } else {
+    aggregate.unpricedRequests += 1;
+  }
+  aggregate.totalCostUsd = usd(aggregate.totalCostMicros);
   return aggregate;
 }
 
 function emptyAggregate(): Aggregate {
-  return { requests: 0, cachedRequests: 0, totalTokens: 0, totalCostUsd: 0 };
+  return {
+    requests: 0,
+    cachedRequests: 0,
+    totalTokens: 0,
+    totalCostMicros: 0,
+    unpricedRequests: 0,
+    totalCostUsd: 0,
+  };
 }
 
 function emptyTotals(): Totals {
   return { ...emptyAggregate(), byProvider: {}, byModel: {} };
-}
-
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6;
 }

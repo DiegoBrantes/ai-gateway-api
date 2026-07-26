@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { matchesAnyKey } from '../auth/apiKeys';
 import { signToken } from '../auth/jwt';
 import { env } from '../config/env';
 import { UnauthorizedError } from '../utils/errors';
@@ -24,7 +25,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { apiKey } = request.body as { apiKey: string };
-      if (!env.API_KEYS.includes(apiKey)) {
+      if (!matchesAnyKey(apiKey, env.API_KEYS)) {
         throw new UnauthorizedError('Unknown API key');
       }
       const token = signToken({ sub: `key:${apiKey.slice(0, 2)}…`, scope: ['chat'] });

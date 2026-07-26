@@ -4,7 +4,16 @@ import { EmbeddingsController } from '../controllers/embeddings.controller';
 import { MetaController } from '../controllers/meta.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { createRateLimiter } from '../middlewares/rateLimit.middleware';
+import {
+  chatResponseSchema,
+  commonErrorResponses,
+  embeddingsResponseSchema,
+  modelsResponseSchema,
+  providersResponseSchema,
+} from '../schemas/openapi';
 import type { AppServices } from '../app';
+
+const security: Array<Record<string, string[]>> = [{ apiKey: [] }, { bearerAuth: [] }];
 
 const messageSchema = {
   type: 'object',
@@ -28,6 +37,9 @@ const chatBodySchema = {
     temperature: { type: 'number', minimum: 0, maximum: 2 },
     maxTokens: { type: 'integer', minimum: 1 },
   },
+  examples: [
+    { messages: [{ role: 'user', content: 'Explain a reverse proxy in one sentence.' }] },
+  ],
 };
 
 /**
@@ -54,8 +66,12 @@ export async function registerV1(
       schema: {
         tags: ['chat'],
         summary: 'Create a chat completion',
-        security: [{ apiKey: [] }],
+        security,
         body: chatBodySchema,
+        response: {
+          200: { description: 'Chat completion', ...chatResponseSchema },
+          ...commonErrorResponses,
+        },
       },
     },
     chat.chat,
@@ -68,9 +84,15 @@ export async function registerV1(
         tags: ['chat'],
         summary: 'Stream a chat completion over SSE',
         description:
-          'Returns `text/event-stream`. Events: `delta` (text chunks), `done` (usage), `end`.',
-        security: [{ apiKey: [] }],
+          'Returns `text/event-stream`. SSE is not fully expressible in OpenAPI; ' +
+          'the event contract is: `provider` (chosen provider/model, sent once), ' +
+          '`delta` (text chunks: `{content, provider}`), `done` ' +
+          '(`{usage, cost, attempts, provider, model}`), `error` ' +
+          '(`{code, message, requestId}`), then `end` with `[DONE]`. Provider ' +
+          'failover happens only before the first `delta`.',
+        security,
         body: chatBodySchema,
+        response: { ...commonErrorResponses },
       },
     },
     chat.stream,
@@ -82,7 +104,7 @@ export async function registerV1(
       schema: {
         tags: ['embeddings'],
         summary: 'Create embeddings',
-        security: [{ apiKey: [] }],
+        security,
         body: {
           type: 'object',
           required: ['input'],
@@ -93,6 +115,11 @@ export async function registerV1(
               oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
             },
           },
+          examples: [{ input: ['hello', 'world'] }],
+        },
+        response: {
+          200: { description: 'Embedding vectors', ...embeddingsResponseSchema },
+          ...commonErrorResponses,
         },
       },
     },
@@ -105,7 +132,11 @@ export async function registerV1(
       schema: {
         tags: ['meta'],
         summary: 'List providers and their status',
-        security: [{ apiKey: [] }],
+        security,
+        response: {
+          200: { description: 'Providers', ...providersResponseSchema },
+          401: commonErrorResponses[401],
+        },
       },
     },
     meta.providers,
@@ -116,8 +147,12 @@ export async function registerV1(
     {
       schema: {
         tags: ['meta'],
-        summary: 'List available models',
-        security: [{ apiKey: [] }],
+        summary: 'List available models with per-model capabilities',
+        security,
+        response: {
+          200: { description: 'Models', ...modelsResponseSchema },
+          401: commonErrorResponses[401],
+        },
       },
     },
     meta.models,
@@ -129,7 +164,8 @@ export async function registerV1(
       schema: {
         tags: ['meta'],
         summary: 'Usage & cost for the current caller',
-        security: [{ apiKey: [] }],
+        security,
+        response: { 401: commonErrorResponses[401] },
       },
     },
     meta.usage,
