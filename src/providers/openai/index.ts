@@ -8,11 +8,16 @@ import type {
   Provider,
   ProviderChatResult,
   ProviderEmbeddingsResult,
+  ProviderModel,
   ProviderStreamEvent,
 } from '../types';
 
-const CHAT_MODELS = ['gpt-4o', 'gpt-4o-mini'];
-const EMBEDDING_MODELS = ['text-embedding-3-small', 'text-embedding-3-large'];
+const MODELS: ProviderModel[] = [
+  { id: 'gpt-4o', capabilities: ['chat', 'stream'] },
+  { id: 'gpt-4o-mini', capabilities: ['chat', 'stream'] },
+  { id: 'text-embedding-3-small', capabilities: ['embeddings'] },
+  { id: 'text-embedding-3-large', capabilities: ['embeddings'] },
+];
 
 /**
  * OpenAI adapter, talking to the standard `/chat/completions` and
@@ -21,14 +26,19 @@ const EMBEDDING_MODELS = ['text-embedding-3-small', 'text-embedding-3-large'];
  */
 export class OpenAIProvider implements Provider {
   readonly name = 'openai';
-  readonly capabilities = ['chat', 'embeddings', 'vision'] as const;
+  readonly isMock = false;
+  readonly capabilities = ['chat', 'embeddings'] as const;
 
   isConfigured(): boolean {
     return env.OPENAI_API_KEY.length > 0;
   }
 
   listModels(): string[] {
-    return [...CHAT_MODELS, ...EMBEDDING_MODELS];
+    return MODELS.map((model) => model.id);
+  }
+
+  listModelInfos(): ProviderModel[] {
+    return MODELS;
   }
 
   defaultChatModel(): string {
@@ -39,14 +49,18 @@ export class OpenAIProvider implements Provider {
     return 'text-embedding-3-small';
   }
 
-  async chat(request: ChatRequest): Promise<ProviderChatResult> {
+  async chat(request: ChatRequest, signal?: AbortSignal): Promise<ProviderChatResult> {
     const model = request.model ?? this.defaultChatModel();
-    const response = await this.post('/chat/completions', {
-      model,
-      messages: request.messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
-    });
+    const response = await this.post(
+      '/chat/completions',
+      {
+        model,
+        messages: request.messages,
+        temperature: request.temperature,
+        max_tokens: request.maxTokens,
+      },
+      signal,
+    );
     const data = (await response.json()) as OpenAIChatCompletion;
     const choice = data.choices?.[0];
     if (!choice) throw new ProviderError(this.name, 'Empty completion response');
@@ -59,16 +73,21 @@ export class OpenAIProvider implements Provider {
 
   async *chatStream(
     request: ChatRequest,
+    signal?: AbortSignal,
   ): AsyncGenerator<ProviderStreamEvent, void, unknown> {
     const model = request.model ?? this.defaultChatModel();
-    const response = await this.post('/chat/completions', {
-      model,
-      messages: request.messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
-      stream: true,
-      stream_options: { include_usage: true },
-    });
+    const response = await this.post(
+      '/chat/completions',
+      {
+        model,
+        messages: request.messages,
+        temperature: request.temperature,
+        max_tokens: request.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+      },
+      signal,
+    );
 
     const promptTokens = estimatePromptTokens(request.messages);
     let completionText = '';
@@ -90,10 +109,13 @@ export class OpenAIProvider implements Provider {
     yield { type: 'done', usage, model };
   }
 
-  async embeddings(request: EmbeddingsRequest): Promise<ProviderEmbeddingsResult> {
+  async embeddings(
+    request: EmbeddingsRequest,
+    signal?: AbortSignal,
+  ): Promise<ProviderEmbeddingsResult> {
     const model = request.model ?? this.defaultEmbeddingModel();
     const input = Array.isArray(request.input) ? request.input : [request.input];
-    const response = await this.post('/embeddings', { model, input });
+    const response = await this.post('/embeddings', { model, input }, signal);
     const data = (await response.json()) as OpenAIEmbeddings;
     return {
       embeddings: data.data.map((item) => item.embedding),
@@ -105,7 +127,11 @@ export class OpenAIProvider implements Provider {
     };
   }
 
-  private async post(path: string, body: unknown): Promise<Response> {
+  private async post(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     const response = await fetchWithTimeout(
       `${env.OPENAI_BASE_URL}${path}`,
       {
@@ -118,6 +144,7 @@ export class OpenAIProvider implements Provider {
       },
       env.REQUEST_TIMEOUT_MS,
       this.name,
+      signal,
     );
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

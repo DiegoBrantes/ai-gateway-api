@@ -28,9 +28,14 @@ export interface TokenUsage {
 
 export interface CostBreakdown {
   currency: 'USD';
-  promptCost: number;
-  completionCost: number;
-  totalCost: number;
+  /** Dollar costs, or `null` when the model has no entry in the pricing table. */
+  promptCost: number | null;
+  completionCost: number | null;
+  totalCost: number | null;
+  /** Integer micro-dollars (1e-6 USD) for float-free accumulation; null when unknown. */
+  costMicros: number | null;
+  /** False when the model is absent from the pricing table (cost is unknown, not zero). */
+  pricingKnown: boolean;
 }
 
 export interface ChatResponse {
@@ -43,12 +48,6 @@ export interface ChatResponse {
   /** Providers actually attempted before this one succeeded. */
   attempts: string[];
   latencyMs: number;
-}
-
-/** A single chunk emitted while streaming a chat completion. */
-export interface ChatStreamChunk {
-  delta: string;
-  done: boolean;
 }
 
 export interface EmbeddingsRequest {
@@ -68,11 +67,13 @@ export interface EmbeddingsResponse {
 export interface ModelInfo {
   id: string;
   provider: string;
-  capabilities: Array<'chat' | 'embeddings' | 'vision'>;
+  capabilities: Array<'chat' | 'stream' | 'embeddings'>;
 }
 
 export interface ProviderHealth {
   name: string;
   configured: boolean;
+  /** True for the built-in mock provider, so callers never confuse it. */
+  mock: boolean;
   models: string[];
 }

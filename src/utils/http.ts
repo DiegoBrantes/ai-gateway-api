@@ -2,19 +2,30 @@ import { ProviderError } from './errors';
 
 /**
  * fetch wrapper with an AbortController-based timeout. Node 20+ ships
- * a global fetch, so no HTTP client dependency is required.
+ * a global fetch, so no HTTP client dependency is required. An optional
+ * external signal (e.g. the client having disconnected) is linked so the
+ * upstream request is aborted promptly when the caller goes away.
  */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
   provider: string,
+  externalSignal?: AbortSignal,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new ProviderError(provider, 'Request cancelled by client', 499);
+    }
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ProviderError(provider, `Request timed out after ${timeoutMs}ms`, 504);
     }
@@ -24,6 +35,7 @@ export async function fetchWithTimeout(
     );
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 }
 

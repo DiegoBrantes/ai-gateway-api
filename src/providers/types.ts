@@ -1,9 +1,19 @@
-import type {
-  ChatRequest,
-  ChatStreamChunk,
-  EmbeddingsRequest,
-  TokenUsage,
-} from '../types';
+import type { ChatRequest, EmbeddingsRequest, TokenUsage } from '../types';
+
+/**
+ * Capabilities a specific model supports. Deliberately does NOT include
+ * `vision`: the current domain model represents message content as a plain
+ * string, so no adapter can accept image parts. Advertising `vision` would be
+ * a false claim — it will be added here only when real multimodal support
+ * (types, validation, tests) lands.
+ */
+export type ModelCapability = 'chat' | 'stream' | 'embeddings';
+
+/** Per-model metadata surfaced by `GET /v1/models`. */
+export interface ProviderModel {
+  id: string;
+  capabilities: ReadonlyArray<ModelCapability>;
+}
 
 /** Raw chat output from a provider, before the gateway adds cost/latency. */
 export interface ProviderChatResult {
@@ -29,17 +39,26 @@ export type ProviderStreamEvent =
  */
 export interface Provider {
   readonly name: string;
-  readonly capabilities: ReadonlyArray<'chat' | 'embeddings' | 'vision'>;
+  /** Whether this adapter is the built-in mock (vs. a real vendor). */
+  readonly isMock: boolean;
+  readonly capabilities: ReadonlyArray<'chat' | 'embeddings'>;
 
   /** True when the required credentials are present. */
   isConfigured(): boolean;
+  /** Model ids only (used for provider status). */
   listModels(): string[];
+  /** Per-model metadata with accurate capabilities. */
+  listModelInfos(): ProviderModel[];
   defaultChatModel(): string;
   defaultEmbeddingModel(): string;
 
-  chat(request: ChatRequest): Promise<ProviderChatResult>;
-  chatStream(request: ChatRequest): AsyncGenerator<ProviderStreamEvent, void, unknown>;
-  embeddings(request: EmbeddingsRequest): Promise<ProviderEmbeddingsResult>;
+  chat(request: ChatRequest, signal?: AbortSignal): Promise<ProviderChatResult>;
+  chatStream(
+    request: ChatRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ProviderStreamEvent, void, unknown>;
+  embeddings(
+    request: EmbeddingsRequest,
+    signal?: AbortSignal,
+  ): Promise<ProviderEmbeddingsResult>;
 }
-
-export type { ChatStreamChunk };

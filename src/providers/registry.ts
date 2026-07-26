@@ -1,3 +1,4 @@
+import { isProduction, mockAllowed } from '../config/env';
 import { logger } from '../utils/logger';
 import { AnthropicProvider } from './anthropic';
 import { GeminiProvider } from './gemini';
@@ -23,21 +24,6 @@ export class ProviderRegistry {
     return this.providers.get(name);
   }
 
-  /** Returns the provider or throws a caller-friendly error. */
-  require(name: string): Provider {
-    const provider = this.providers.get(name);
-    if (!provider) {
-      throw new Error(
-        `Unknown provider "${name}". Available: ${this.names().join(', ')}`,
-      );
-    }
-    return provider;
-  }
-
-  names(): string[] {
-    return [...this.providers.keys()];
-  }
-
   all(): Provider[] {
     return [...this.providers.values()];
   }
@@ -45,8 +31,12 @@ export class ProviderRegistry {
 
 /**
  * Assemble the registry. Real providers are always registered (so the
- * `/providers` endpoint can report configuration status), and a mock is
- * added as a safety net so the gateway is usable with zero credentials.
+ * `/providers` endpoint can report configuration status). The mock provider
+ * is registered only when allowed — always outside production, and in
+ * production only when `ALLOW_MOCK_PROVIDER=true`. This prevents a
+ * misconfigured production deployment from silently serving simulated
+ * completions (the boot-time guard in `assertProviderPolicy` is the first line
+ * of defence; this is the second).
  */
 export function buildRegistry(): ProviderRegistry {
   const candidates: Provider[] = [
@@ -56,14 +46,26 @@ export function buildRegistry(): ProviderRegistry {
   ];
 
   const configured = candidates.filter((provider) => provider.isConfigured());
-  if (configured.length === 0) {
-    logger.warn(
-      'No provider credentials found — enabling the built-in mock provider. ' +
-        'Set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY to use real models.',
-    );
-  } else {
+  if (configured.length > 0) {
     logger.info({ providers: configured.map((p) => p.name) }, 'Configured providers');
   }
 
-  return new ProviderRegistry([...candidates, new MockProvider()]);
+  const providers = [...candidates];
+  if (mockAllowed) {
+    providers.push(new MockProvider());
+    if (configured.length === 0) {
+      logger.warn(
+        'No real provider credentials found — using the built-in mock provider. ' +
+          'Set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY to use real models.',
+      );
+    }
+    if (isProduction) {
+      logger.warn(
+        'ALLOW_MOCK_PROVIDER is enabled in production — the gateway may serve ' +
+          'simulated completions. Disable this once real providers are configured.',
+      );
+    }
+  }
+
+  return new ProviderRegistry(providers);
 }

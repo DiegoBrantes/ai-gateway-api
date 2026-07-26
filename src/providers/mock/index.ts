@@ -4,8 +4,14 @@ import type {
   Provider,
   ProviderChatResult,
   ProviderEmbeddingsResult,
+  ProviderModel,
   ProviderStreamEvent,
 } from '../types';
+
+const MODELS: ProviderModel[] = [
+  { id: 'mock-chat', capabilities: ['chat', 'stream'] },
+  { id: 'mock-embed', capabilities: ['embeddings'] },
+];
 
 /**
  * Deterministic in-process provider. It lets the gateway boot and the
@@ -15,6 +21,7 @@ import type {
  */
 export class MockProvider implements Provider {
   readonly name = 'mock';
+  readonly isMock = true;
   readonly capabilities = ['chat', 'embeddings'] as const;
 
   isConfigured(): boolean {
@@ -22,7 +29,11 @@ export class MockProvider implements Provider {
   }
 
   listModels(): string[] {
-    return ['mock-chat', 'mock-embed'];
+    return MODELS.map((model) => model.id);
+  }
+
+  listModelInfos(): ProviderModel[] {
+    return MODELS;
   }
 
   defaultChatModel(): string {
@@ -33,7 +44,7 @@ export class MockProvider implements Provider {
     return 'mock-embed';
   }
 
-  async chat(request: ChatRequest): Promise<ProviderChatResult> {
+  async chat(request: ChatRequest, _signal?: AbortSignal): Promise<ProviderChatResult> {
     const content = this.reply(request);
     const promptTokens = estimatePromptTokens(request.messages);
     const completionTokens = estimateTokens(content);
@@ -50,10 +61,12 @@ export class MockProvider implements Provider {
 
   async *chatStream(
     request: ChatRequest,
+    signal?: AbortSignal,
   ): AsyncGenerator<ProviderStreamEvent, void, unknown> {
     const content = this.reply(request);
     const promptTokens = estimatePromptTokens(request.messages);
     for (const word of content.split(' ')) {
+      if (signal?.aborted) return;
       yield { type: 'delta', delta: `${word} ` };
     }
     const completionTokens = estimateTokens(content);
@@ -68,7 +81,10 @@ export class MockProvider implements Provider {
     };
   }
 
-  async embeddings(request: EmbeddingsRequest): Promise<ProviderEmbeddingsResult> {
+  async embeddings(
+    request: EmbeddingsRequest,
+    _signal?: AbortSignal,
+  ): Promise<ProviderEmbeddingsResult> {
     const inputs = Array.isArray(request.input) ? request.input : [request.input];
     const promptTokens = inputs.reduce((sum, text) => sum + estimateTokens(text), 0);
     return {

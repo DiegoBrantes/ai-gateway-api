@@ -1,7 +1,16 @@
 /**
+ * Event boundary in an SSE stream: a blank line, which per the spec may use
+ * LF, CR, or CRLF line endings. Providers differ — OpenAI emits `\n\n` while
+ * Google Gemini emits `\r\n\r\n` — so we must accept all of them.
+ */
+const EVENT_BOUNDARY = /\r\n\r\n|\n\n|\r\r/;
+const LINE_BREAK = /\r\n|\n|\r/;
+
+/**
  * Parse a Server-Sent-Events response body into an async iterator of
- * `data:` payloads. Handles chunk boundaries that split events and
- * stops at the `[DONE]` sentinel used by OpenAI-style streams.
+ * `data:` payloads. Handles chunk boundaries that split events, any of the
+ * three SSE line-ending styles, and stops at the `[DONE]` sentinel used by
+ * OpenAI-style streams.
  */
 export async function* parseSSE(
   body: ReadableStream<Uint8Array> | null,
@@ -17,14 +26,14 @@ export async function* parseSSE(
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const rawEvent = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
+      let match = EVENT_BOUNDARY.exec(buffer);
+      while (match !== null) {
+        const rawEvent = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
         const data = extractData(rawEvent);
         if (data === '[DONE]') return;
         if (data !== null) yield data;
-        boundary = buffer.indexOf('\n\n');
+        match = EVENT_BOUNDARY.exec(buffer);
       }
     }
   } finally {
@@ -33,7 +42,7 @@ export async function* parseSSE(
 }
 
 function extractData(rawEvent: string): string | null {
-  const lines = rawEvent.split('\n');
+  const lines = rawEvent.split(LINE_BREAK);
   const dataLines = lines
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice(5).trimStart());

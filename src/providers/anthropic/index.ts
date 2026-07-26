@@ -13,10 +13,14 @@ import type {
   Provider,
   ProviderChatResult,
   ProviderEmbeddingsResult,
+  ProviderModel,
   ProviderStreamEvent,
 } from '../types';
 
-const CHAT_MODELS = ['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'];
+const MODELS: ProviderModel[] = [
+  { id: 'claude-3-5-sonnet-latest', capabilities: ['chat', 'stream'] },
+  { id: 'claude-3-5-haiku-latest', capabilities: ['chat', 'stream'] },
+];
 const DEFAULT_MAX_TOKENS = 1024;
 
 /**
@@ -26,14 +30,19 @@ const DEFAULT_MAX_TOKENS = 1024;
  */
 export class AnthropicProvider implements Provider {
   readonly name = 'anthropic';
-  readonly capabilities = ['chat', 'vision'] as const;
+  readonly isMock = false;
+  readonly capabilities = ['chat'] as const;
 
   isConfigured(): boolean {
     return env.ANTHROPIC_API_KEY.length > 0;
   }
 
   listModels(): string[] {
-    return [...CHAT_MODELS];
+    return MODELS.map((model) => model.id);
+  }
+
+  listModelInfos(): ProviderModel[] {
+    return MODELS;
   }
 
   defaultChatModel(): string {
@@ -45,16 +54,19 @@ export class AnthropicProvider implements Provider {
     throw new ProviderError(this.name, 'Anthropic does not support embeddings', 400);
   }
 
-  async chat(request: ChatRequest): Promise<ProviderChatResult> {
+  async chat(request: ChatRequest, signal?: AbortSignal): Promise<ProviderChatResult> {
     const model = request.model ?? this.defaultChatModel();
     const { system, messages } = splitSystem(request.messages);
-    const response = await this.post({
-      model,
-      system,
-      messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
-    });
+    const response = await this.post(
+      {
+        model,
+        system,
+        messages,
+        temperature: request.temperature,
+        max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
+      },
+      signal,
+    );
     const data = (await response.json()) as AnthropicMessage;
     const content = (data.content ?? [])
       .filter((block) => block.type === 'text')
@@ -65,17 +77,21 @@ export class AnthropicProvider implements Provider {
 
   async *chatStream(
     request: ChatRequest,
+    signal?: AbortSignal,
   ): AsyncGenerator<ProviderStreamEvent, void, unknown> {
     const model = request.model ?? this.defaultChatModel();
     const { system, messages } = splitSystem(request.messages);
-    const response = await this.post({
-      model,
-      system,
-      messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
-      stream: true,
-    });
+    const response = await this.post(
+      {
+        model,
+        system,
+        messages,
+        temperature: request.temperature,
+        max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
+        stream: true,
+      },
+      signal,
+    );
 
     const promptTokens = estimatePromptTokens(request.messages);
     let completionText = '';
@@ -105,11 +121,14 @@ export class AnthropicProvider implements Provider {
     };
   }
 
-  async embeddings(_request: EmbeddingsRequest): Promise<ProviderEmbeddingsResult> {
+  async embeddings(
+    _request: EmbeddingsRequest,
+    _signal?: AbortSignal,
+  ): Promise<ProviderEmbeddingsResult> {
     throw new ProviderError(this.name, 'Anthropic does not support embeddings', 400);
   }
 
-  private async post(body: unknown): Promise<Response> {
+  private async post(body: unknown, signal?: AbortSignal): Promise<Response> {
     const response = await fetchWithTimeout(
       `${env.ANTHROPIC_BASE_URL}/messages`,
       {
@@ -123,6 +142,7 @@ export class AnthropicProvider implements Provider {
       },
       env.REQUEST_TIMEOUT_MS,
       this.name,
+      signal,
     );
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
