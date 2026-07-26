@@ -7,12 +7,19 @@ services:
       NODE_ENV: production
       PORT: 3000
       REDIS_URL: redis://redis:6379
-      API_KEYS: ${API_KEYS:-dev-key-please-change}
+      # Production refuses to boot with the example key — supply your own.
+      API_KEYS: ${API_KEYS:?Set API_KEYS (comma-separated) in your shell or .env}
+      JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-openai}
       FALLBACK_PROVIDERS: ${FALLBACK_PROVIDERS:-anthropic,gemini}
+      # No real provider keys? Set ALLOW_MOCK_PROVIDER=true to run the demo on mock.
+      ALLOW_MOCK_PROVIDER: ${ALLOW_MOCK_PROVIDER:-true}
+      # Dashboard/metrics are protected in production by default.
+      DASHBOARD_PUBLIC: ${DASHBOARD_PUBLIC:-false}
     depends_on:
       redis:
         condition: service_healthy

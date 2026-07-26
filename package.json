@@ -1,6 +1,6 @@
 {
   "name": "ai-gateway-api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Unified, provider-agnostic gateway for OpenAI, Google Gemini and Anthropic — one API, automatic fallback, streaming, token accounting and cost estimation.",
   "type": "module",
   "engines": {
@@ -54,7 +54,7 @@
     "@eslint/js": "^9.18.0",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.10.5",
-    "@vitest/coverage-v8": "^2.1.8",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^9.1.0",
     "pino-pretty": "^13.0.0",
@@ -63,6 +63,11 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "@fastify/static": "^10.1.2",
+    "esbuild": "^0.28.1",
+    "brace-expansion": "^5.0.8"
   }
 }
